@@ -12,6 +12,9 @@
 #include "fastdma.h"
 #include "slicedrawing.h"
 
+#undef min
+#include <array>
+
 #define NB_SLICES (SCREEN_HEIGHT/SLICE_HEIGHT)
 #define NB_BUFFERS 2
 #define BUFFER_SIZE (SCREEN_WIDTH*SLICE_HEIGHT)
@@ -51,23 +54,24 @@ constexpr FP scrollspeed = 5;
 constexpr int yorigin = 16*3;
 FP altitude = 15;
 
-// uint16_t pickOverworldPixel(int x, int y) {
-//   if (x<0 || x>=1024 || y<0 || y>=1024) return 0;
-//   // int tileidx = OVERWORLD_MAP[(x>>4) + ((y&0xFFF0)<<2)];
-//   // int tileoffset = tileidx << 7; // 16*16/2 = 128 = <<7
-//   // int coloroffset = (x%16 + ((y%16)<<4))>>1;
-//   // uint8_t coloridx = OVERWORLD_TILES[tileoffset+coloroffset]; // two colors indices in one here
-//   // coloridx = x&1 ? (coloridx&0x0F) : (coloridx>>4);
-//   // return OVERWORLD_PALETTE[coloridx];
-//   uint8_t coloridx = OVERWORLD_TILES[(OVERWORLD_MAP[(x>>4) + ((y>>4)<<6)] << 7)+(((x%16) + ((y%16)<<4))>>1)];
-//   return OVERWORLD_PALETTE[x&1 ? (coloridx&0x0F) : (coloridx>>4)];
-// }
+// tree forest!
+#define NB_TREES 64
+struct Tree {
+  uint16_t xo;
+  uint16_t yo;
+  uint8_t ho;
+  Vec2D pos3D;
+  uint8_t height;
+};
 
-// void fillline(Vec2D start, Vec2D step, uint16_t* buffer) {
-//   for(int x=0; x<SCREEN_WIDTH; ++x) {
-//     buffer[x] = pickOverworldPixel((int)start(0),(int)start(1));
-//     start += step;
-//   }
+Tree forest[NB_TREES];
+Array<uint8_t,NB_TREES> treeorder;
+
+// void insertTreeAt(int pos, int treeid) {
+//   treeorder.push_back(0);
+//   uint8_t* array = treeorder.data();
+//   memmove8(array+pos+1,array+pos,treeorder.size()-pos);
+//   array[pos] = treeid;
 // }
 
 #define TFT_CS		(30u)
@@ -90,6 +94,8 @@ struct IdleTracking {
 };
 
 IdleTracking idletrack;
+uint16_t maxSliceBuffer;
+
 FP ppdalt;
 
 
@@ -101,21 +107,6 @@ inline void dmaWaitAndTrack(uint32_t channel) {
 
 void drawSlice(int slice, uint16_t *buffer) {
   for(int by=0; by < SLICE_HEIGHT; ++by) {
-//     int y = slice*SLICE_HEIGHT + by - yorigin;
-//     if (y>0) {
-//       FP fpy = y;
-//       FP z = ppdalt/fpy;
-//       Vec2D s = campos + camdir*z;
-//       fillline(s-camtangent*z,camtangent*FP(z*(2.0/SCREEN_WIDTH)),&buffer[by*SCREEN_WIDTH]);
-//     }
-//     else {
-// #if SLICE_CALLBACK
-//       memcpy(&buffer[by*SCREEN_WIDTH],SKYSCANLINE,SCREEN_WIDTH*sizeof(uint16_t));
-// #else
-//       memset32(RAM_CHANNEL,(void*)&buffer[by*SCREEN_WIDTH],&bgColor,SCREEN_WIDTH*sizeof(uint16_t));
-//       dmaWait(RAM_CHANNEL);
-// #endif
-//     }
     SliceDrawing::flush(&buffer[by*SCREEN_WIDTH],slice*SLICE_HEIGHT + by);
   }
 }
@@ -154,6 +145,19 @@ void callbackDrawNextSlice() {
 }
 #endif
 
+bool worldToScreen(Vec2D wxy, FP alt, Vec2D& out, FP* secondaltout=nullptr) {
+  wxy -= campos;
+  wxy = {wxy(1)*camdir(0) - wxy(0)*camdir(1), wxy(0)*camdir(0) + wxy(1)*camdir(1)};
+  if (wxy(1) < FP(-0.1)) return false;
+  FP df(FP(SCREEN_WIDTH/2)/wxy(1));
+  out(0) = wxy(0) * df + FP(SCREEN_WIDTH/2);
+  out(1) = (altitude-alt) * df + FP(yorigin);
+  if (secondaltout) {
+    *secondaltout = (altitude-*secondaltout) * df + FP(yorigin);
+  }
+  return true;
+}
+
 void setup()
 {
   WDT->CTRL.bit.ENABLE = 0;
@@ -177,11 +181,11 @@ void setup()
 
 
   SerialUSB.begin(9600);
-}
 
-inline void showmem(uint8_t* buf, uint32_t size) {
-  for(uint32_t i=0; i < size; ++i) {
-    SerialUSB.printf("%.2x ",buf[i]);
+  for(int i=0; i<NB_TREES;++i) {
+    forest[i].xo = random(1024);
+    forest[i].yo = random(1024);
+    forest[i].ho = random(16,64);
   }
 }
 
@@ -211,17 +215,10 @@ void loop()
 #endif
   if (newmilli - millicurrent >= wholesecond) {
     millicurrent = newmilli;
-    SerialUSB.printf("FPS: %i, idle: %i%%\n", framecount,idletrack.total*wholesecond/10000);
+    SerialUSB.printf("FPS: %i, idle: %i%%, slice buffer: %i%%\n", framecount,idletrack.total*wholesecond/10000,(maxSliceBuffer*100)/SLICEDRAW_BUFFER_SIZE);
     framecount = 0;
+    maxSliceBuffer = 0;
     idletrack.reset();
-
-    // uint8_t test[4];
-    // *((uint32_t*)test) = 0;
-    // showmem(test,4);
-    // SerialUSB.print("  ...  ");
-    // *((uint16_t*)(&test[1])) = 0x1234;
-    // showmem(test,4);
-    // SerialUSB.println(" !");
   }
   else {
     ++framecount;
@@ -244,8 +241,42 @@ void loop()
     SliceDrawing::fulltline(y,0,campos + camdir*z - camtangent*z,camtangent*FP(z*(2.0/SCREEN_WIDTH)));
   }
 
-  SliceDrawing::filledsquare(10,10,255,50,0x00F0);
+  //SliceDrawing::filledsquare(10,10,255,50,0x00F0);
+  treeorder.clear();
 
+  for(int i=0; i<NB_TREES;++i) {
+    Tree& curtree = forest[i];
+    curtree.pos3D = {curtree.xo,curtree.yo};
+    FP alt(curtree.ho);
+    if (worldToScreen(curtree.pos3D,0,curtree.pos3D,&alt)) {
+      uint16_t height16 = (uint16_t)(curtree.pos3D(1)-alt);
+      curtree.height = height16 > 255 ? 255 : height16;
+
+      treeorder.push_back(i);
+      for(int j=treeorder.size()-2;j>=0;--j) {
+        Tree& othertree = forest[treeorder[j]];
+        if (curtree.pos3D(1) < othertree.pos3D(1)) {
+          uint8_t tmp = treeorder[j];
+          treeorder[j]=treeorder[j+1];
+          treeorder[j+1]=tmp;
+        }
+      }
+      
+      //SliceDrawing::scaledsprite(0,((int16_t)twp(0))-height16/2,((int16_t)twp(1))-height16,height8,height8);
+    }
+  }
+
+  for(int i=0; i<treeorder.size(); ++i) {
+    Tree& curtree = forest[treeorder[i]];
+    SliceDrawing::scaledsprite(0,((int16_t)curtree.pos3D(0))-curtree.height/2,((int16_t)curtree.pos3D(1))-curtree.height,curtree.height,curtree.height);
+  }
+  
+  //SliceDrawing::scaledsprite(0,-30,-30,75,75);
+
+  uint16_t bfv = SliceDrawing::getBufferSize();
+  if (bfv > maxSliceBuffer) {
+    maxSliceBuffer = bfv;
+  }
 #if SLICE_CALLBACK
   currentSlice = 0;
   TFTStart();

@@ -67,6 +67,8 @@ struct __packed s_spriteslice {
     uint8_t spriteid:8;
     int16_t x:9;
     uint8_t spry:7;
+    uint8_t w;
+    FP stepx;
 };
 
 struct __packed s_hline {
@@ -90,7 +92,24 @@ void fulltline(uint8_t y, uint8_t mapid, Vec2D start, Vec2D step) {
     pushArgs(y,&s);
 }
 
-// todo sprite slice
+void scaledsprite(uint8_t spriteid, int16_t x, int16_t y, uint8_t w, uint8_t h) {
+    if (x+w <= 0 || x>=SCREEN_WIDTH || y+h <= 0 || y>= SCREEN_HEIGHT) return;
+    Vec2D scl{FP(TREESPRITE[0])/FP(w),FP(TREESPRITE[1])/FP(h)};
+    s_spriteslice s{OPID_SPRITESLICE,0,x,y,w,scl(0)};
+    FP spry(0);
+    if (y<0) {
+        spry -= FP(y)*scl(1);
+        h += y;
+        y = 0;
+    }
+    int16_t end=min(y+h,SCREEN_HEIGHT);
+    while (y<end) {
+        s.spry = (int)spry;
+        pushArgs(y,&s);
+        spry += scl(1);
+        ++y;
+    }
+}
 
 void hline(uint8_t x, uint8_t y, uint8_t w, uint16_t color) {
     s_hline s{OPID_HLINE,x,w,color};
@@ -111,8 +130,9 @@ void filledsquare(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint16_t color) {
 // fillcolor
 void itnl_fillcolor(uint16_t* buffer, uint16_t color) {
     uint32_t c = color | (color<<16);
-    memset32(RAM_CHANNEL,(void*)buffer,&c,SCREEN_WIDTH*sizeof(uint16_t));
-    dmaWait(RAM_CHANNEL);
+    // memset32(RAM_CHANNEL,(void*)buffer,&c,SCREEN_WIDTH*sizeof(uint16_t));
+    // dmaWait(RAM_CHANNEL);
+    memset(buffer,c,SCREEN_WIDTH*2);
 }
 void call_fillcolor(uint16_t* buffer, void* args) {
     s_fullcline* trueargs = (s_fullcline*)args;
@@ -142,7 +162,29 @@ void call_tline(uint16_t* buffer, void* args) {
     itnl_tline(buffer, trueargs->start, trueargs->step);
 }
 
-// todo sprite slice
+// sprite
+void itnl_sprite(uint16_t* buffer, uint8_t spriteid, int16_t x, uint8_t spry, uint8_t w, FP stepx) {
+    const uint16_t* sprptr = TREESPRITE + 2 + spry*TREESPRITE[1];
+
+    FP sprx(0);
+    if (x<0) {
+        sprx -= FP(x)*stepx;
+        w += x;
+        x = 0;
+    }
+    int16_t end=min(x+w,SCREEN_WIDTH);
+
+    while(x < end) {
+        uint16_t color = sprptr[(int)sprx];
+        if (color) buffer[x] = color;
+        sprx += stepx;
+        ++x;
+    }
+}
+void call_sprite(uint16_t* buffer, void* args) {
+    s_spriteslice* trueargs = (s_spriteslice*)args;
+    itnl_sprite(buffer, trueargs->spriteid, trueargs->x, trueargs->spry, trueargs->w, trueargs->stepx);
+}
 
 // hline
 void itnl_hline(uint16_t* buffer, uint8_t x, uint8_t w, uint16_t color) {
@@ -169,7 +211,7 @@ const caller callers[] = {
         {nullptr, 0},
         {call_fillcolor, sizeof(s_fullcline)},
         {call_tline, sizeof(s_fulltline)},
-        {nullptr, 0},
+        {call_sprite, sizeof(s_spriteslice)},
         {call_hline, sizeof(s_hline)},
     };
 
@@ -192,6 +234,10 @@ void flush(uint16_t* linebuffer, uint8_t slice) {
         //SerialUSB.printf("nextentry: %i\n", nextentry);
         //nextentry = 0;
     }
+}
+
+uint16_t getBufferSize() {
+    return top;
 }
 
 };
