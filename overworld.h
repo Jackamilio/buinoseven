@@ -1,16 +1,5 @@
 #pragma once
 
-#define SKY_COLOR 0x7DDF
-#define x1   SKY_COLOR
-#define x2   x1,  x1
-#define x4   x2,  x2
-#define x8   x4,  x4
-#define x16  x8,  x8
-#define x32  x16, x16
-#define x64  x32, x32
-
-const uint16_t SKYSCANLINE[] = {x64,x64,x32};
-
 const uint16_t OVERWORLD_PALETTE[] = {
 
     0x0000, // 0x0

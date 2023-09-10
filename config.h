@@ -1,0 +1,15 @@
+#pragma once
+
+#define SCREEN_WIDTH 160
+#define SCREEN_HEIGHT 128
+#define SLICE_HEIGHT 16
+
+#define DESIRED_MHZ 70UL
+
+#define USE_OVERCLOCKING true
+#define SLICE_CALLBACK false
+
+#define SLICEDRAW_BUFFER_SIZE 8192
+
+#define TFT_CHANNEL 0
+#define RAM_CHANNEL 3

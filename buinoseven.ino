@@ -1,6 +1,7 @@
 #include <FastLED.h>
 #include <SPI.h>
 #include <SdFat.h>
+#include "config.h"
 #include "gdl/btn.h"
 #include "gb/Display-ST7735.h"
 #include "gb/Bootloader.h"
@@ -8,10 +9,9 @@
 #include "overworld.h"
 #include "sincoslut.h"
 #include "oc.h"
+#include "fastdma.h"
+#include "slicedrawing.h"
 
-#define SCREEN_WIDTH 160
-#define SCREEN_HEIGHT 128
-#define SLICE_HEIGHT 16
 #define NB_SLICES (SCREEN_HEIGHT/SLICE_HEIGHT)
 #define NB_BUFFERS 2
 #define BUFFER_SIZE (SCREEN_WIDTH*SLICE_HEIGHT)
@@ -21,12 +21,6 @@
 #define sdChipSelect 26
 
 SdFs sd;
-
-#define TFT_CHANNEL 0
-#define RAM_CHANNEL 3
-
-#define USE_OVERCLOCKING true
-#define SLICE_CALLBACK false
 
 #ifndef USE_OVERCLOCKING
 #define USE_OVERCLOCKING false
@@ -38,16 +32,6 @@ SdFs sd;
 
 //uint32_t bgColor __attribute__ ((aligned (8))) = 0x00001111;//0x0ff000ff;
 uint32_t bgColor = 0x7DDF7DDF;
-
-void dmaSetCompletedCallback(uint32_t channel, void (*callback)(void));
-
-void dmaInit(void);
-void spiDma( uint32_t chnltx, void *txdata, size_t n );
-
-void dmaStart( uint32_t channel );
-void dmaWait( uint32_t );
-void dmaWait2( uint32_t channel );
-void memset32( uint32_t channel, void *dst, uint32_t * value, size_t n);
 
 static SPISettings tftSPISettings = SPISettings(24000000, MSBFIRST, SPI_MODE0);
 
@@ -67,24 +51,24 @@ constexpr FP scrollspeed = 5;
 constexpr int yorigin = 16*3;
 FP altitude = 15;
 
-uint16_t pickOverworldPixel(int x, int y) {
-  if (x<0 || x>=1024 || y<0 || y>=1024) return 0;
-  // int tileidx = OVERWORLD_MAP[(x>>4) + ((y&0xFFF0)<<2)];
-  // int tileoffset = tileidx << 7; // 16*16/2 = 128 = <<7
-  // int coloroffset = (x%16 + ((y%16)<<4))>>1;
-  // uint8_t coloridx = OVERWORLD_TILES[tileoffset+coloroffset]; // two colors indices in one here
-  // coloridx = x&1 ? (coloridx&0x0F) : (coloridx>>4);
-  // return OVERWORLD_PALETTE[coloridx];
-  uint8_t coloridx = OVERWORLD_TILES[(OVERWORLD_MAP[(x>>4) + ((y>>4)<<6)] << 7)+(((x%16) + ((y%16)<<4))>>1)];
-  return OVERWORLD_PALETTE[x&1 ? (coloridx&0x0F) : (coloridx>>4)];
-}
+// uint16_t pickOverworldPixel(int x, int y) {
+//   if (x<0 || x>=1024 || y<0 || y>=1024) return 0;
+//   // int tileidx = OVERWORLD_MAP[(x>>4) + ((y&0xFFF0)<<2)];
+//   // int tileoffset = tileidx << 7; // 16*16/2 = 128 = <<7
+//   // int coloroffset = (x%16 + ((y%16)<<4))>>1;
+//   // uint8_t coloridx = OVERWORLD_TILES[tileoffset+coloroffset]; // two colors indices in one here
+//   // coloridx = x&1 ? (coloridx&0x0F) : (coloridx>>4);
+//   // return OVERWORLD_PALETTE[coloridx];
+//   uint8_t coloridx = OVERWORLD_TILES[(OVERWORLD_MAP[(x>>4) + ((y>>4)<<6)] << 7)+(((x%16) + ((y%16)<<4))>>1)];
+//   return OVERWORLD_PALETTE[x&1 ? (coloridx&0x0F) : (coloridx>>4)];
+// }
 
-void fillline(Vec2D start, Vec2D step, uint16_t* buffer) {
-  for(int x=0; x<SCREEN_WIDTH; ++x) {
-    buffer[x] = pickOverworldPixel((int)start(0),(int)start(1));
-    start += step;
-  }
-}
+// void fillline(Vec2D start, Vec2D step, uint16_t* buffer) {
+//   for(int x=0; x<SCREEN_WIDTH; ++x) {
+//     buffer[x] = pickOverworldPixel((int)start(0),(int)start(1));
+//     start += step;
+//   }
+// }
 
 #define TFT_CS		(30u)
 #define TFT_DC		(31u)
@@ -117,21 +101,22 @@ inline void dmaWaitAndTrack(uint32_t channel) {
 
 void drawSlice(int slice, uint16_t *buffer) {
   for(int by=0; by < SLICE_HEIGHT; ++by) {
-    int y = slice*SLICE_HEIGHT + by - yorigin;
-    if (y>0) {
-      FP fpy = y;
-      FP z = ppdalt/fpy;
-      Vec2D s = campos + camdir*z;
-      fillline(s-camtangent*z,camtangent*FP(z*(2.0/SCREEN_WIDTH)),&buffer[by*SCREEN_WIDTH]);
-    }
-    else {
-#if SLICE_CALLBACK
-      memcpy(&buffer[by*SCREEN_WIDTH],SKYSCANLINE,SCREEN_WIDTH*sizeof(uint16_t));
-#else
-      memset32(RAM_CHANNEL,(void*)&buffer[by*SCREEN_WIDTH],&bgColor,SCREEN_WIDTH*sizeof(uint16_t));
-      dmaWait(RAM_CHANNEL);
-#endif
-    }
+//     int y = slice*SLICE_HEIGHT + by - yorigin;
+//     if (y>0) {
+//       FP fpy = y;
+//       FP z = ppdalt/fpy;
+//       Vec2D s = campos + camdir*z;
+//       fillline(s-camtangent*z,camtangent*FP(z*(2.0/SCREEN_WIDTH)),&buffer[by*SCREEN_WIDTH]);
+//     }
+//     else {
+// #if SLICE_CALLBACK
+//       memcpy(&buffer[by*SCREEN_WIDTH],SKYSCANLINE,SCREEN_WIDTH*sizeof(uint16_t));
+// #else
+//       memset32(RAM_CHANNEL,(void*)&buffer[by*SCREEN_WIDTH],&bgColor,SCREEN_WIDTH*sizeof(uint16_t));
+//       dmaWait(RAM_CHANNEL);
+// #endif
+//     }
+    SliceDrawing::flush(&buffer[by*SCREEN_WIDTH],slice*SLICE_HEIGHT + by);
   }
 }
 
@@ -194,6 +179,12 @@ void setup()
   SerialUSB.begin(9600);
 }
 
+inline void showmem(uint8_t* buf, uint32_t size) {
+  for(uint32_t i=0; i < size; ++i) {
+    SerialUSB.printf("%.2x ",buf[i]);
+  }
+}
+
 void loop()
 {
   readButtons();
@@ -205,7 +196,7 @@ void loop()
   if (keyB) campos -= camdir * scrollspeed;
   if (keyUp) altitude += FP(1);
   if (keyDown) altitude -= FP(1);
-  //if (keyHome) Bootloader::loader();
+  if (keyHome) Bootloader::loader();
 
   camdir = {cos(angle), sin(angle)};
   camtangent = {-camdir(1),camdir(0)};
@@ -223,12 +214,37 @@ void loop()
     SerialUSB.printf("FPS: %i, idle: %i%%\n", framecount,idletrack.total*wholesecond/10000);
     framecount = 0;
     idletrack.reset();
+
+    // uint8_t test[4];
+    // *((uint32_t*)test) = 0;
+    // showmem(test,4);
+    // SerialUSB.print("  ...  ");
+    // *((uint16_t*)(&test[1])) = 0x1234;
+    // showmem(test,4);
+    // SerialUSB.println(" !");
   }
   else {
     ++framecount;
   }
 
   ppdalt = (SCREEN_WIDTH/2)*altitude;
+
+  SliceDrawing::clear();
+  // SliceDrawing::fillcolor(0,47,0x7DDF);
+  // SliceDrawing::fillcolor(48,100,0xF000);
+  // SliceDrawing::fillcolor(101,127,0x000F);
+
+  // SliceDrawing::fillcolor(0,0,0x7DDF);
+  // SliceDrawing::hline(20,0,40,0xF000);
+
+  SliceDrawing::fillcolor(0,yorigin,0x7DDF);
+  for(uint8_t y=yorigin+1; y<SCREEN_HEIGHT;++y) {
+    FP fpy = y-yorigin;
+    FP z = ppdalt/fpy;
+    SliceDrawing::fulltline(y,0,campos + camdir*z - camtangent*z,camtangent*FP(z*(2.0/SCREEN_WIDTH)));
+  }
+
+  SliceDrawing::filledsquare(10,10,255,50,0x00F0);
 
 #if SLICE_CALLBACK
   currentSlice = 0;

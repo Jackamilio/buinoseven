@@ -1,2 +1,4 @@
 .vscode/
+.theia/
+build/
 assets/gfx.zip

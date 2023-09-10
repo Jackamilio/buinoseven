@@ -18,7 +18,7 @@
  */
 
 // CONFIGURATION DEFINES
-#define DESIRED_MHZ 70UL      // desired overclock frequency in MHz
+//#define DESIRED_MHZ 70UL (config.h)     // desired overclock frequency in MHz
 #define REF_CLK 48000000    // frequency of the reference oscillator. 48MHz is for the DFLL48.
 #define OVERCLOCK_GCLK_ID 4   // gen clock used as reference for the DPLL
 // Utility defines
